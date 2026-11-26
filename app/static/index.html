@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Option ladder — one contract, every price</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark">Ω</div>
+    <div>
+      <h1>Option ladder</h1>
+      <p class="subtle">one contract · every price the stock could trade at</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="session-badge" class="badge" title="The exchange timestamp the quotes belong to">loading…</span>
+    <span id="spot-badge" class="badge mono">—</span>
+    <button id="btn-refresh" class="btn ghost" title="Re-fetch the chain from CBOE (bypasses the 90s cache)">
+      <span class="spin" hidden></span><span>refresh chain</span>
+    </button>
+  </div>
+</header>
+
+<section class="controls">
+  <label class="field">
+    <span>ticker</span>
+    <input id="f-ticker" list="ticker-history" autocomplete="off" spellcheck="false" placeholder="AAPL">
+    <datalist id="ticker-history"></datalist>
+  </label>
+
+  <div class="field seg" role="group" aria-label="call or put">
+    <span>type</span>
+    <div class="seg-inner">
+      <button data-kind="call" class="on">CALL</button>
+      <button data-kind="put">PUT</button>
+    </div>
+  </div>
+
+  <label class="field">
+    <span>expiry</span>
+    <select id="f-expiry"><option value="">— load a ticker —</option></select>
+  </label>
+
+  <label class="field">
+    <span>strike</span>
+    <input id="f-strike" type="number" step="0.5" min="0.01" inputmode="decimal">
+  </label>
+
+  <label class="field narrow" title="Lowest stock price on the ladder, as a percent of today's spot">
+    <span>stock from</span>
+    <input id="f-lo" type="number" step="1" value="-25"> <em class="unit">%</em>
+  </label>
+  <label class="field narrow" title="Highest stock price on the ladder, as a percent of today's spot">
+    <span>to</span>
+    <input id="f-hi" type="number" step="1" value="25"> <em class="unit">%</em>
+  </label>
+  <label class="field narrow">
+    <span>rows</span>
+    <input id="f-steps" type="number" step="1" min="4" max="60" value="15">
+  </label>
+
+  <label class="field slider-field">
+    <span title="Move the clock forward: the premium column then shows what the contract is worth that many days from now">decay <b id="f-days-out">0</b> days</span>
+    <input id="f-days" type="range" min="0" max="365" step="1" value="0">
+  </label>
+
+  <details class="advanced">
+    <summary>assumptions</summary>
+    <div class="advanced-grid">
+      <label class="field narrow"><span>IV %</span><input id="f-vol" type="number" step="0.1" min="0.1" placeholder="from chain"></label>
+      <label class="field narrow"><span>rate %</span><input id="f-rate" type="number" step="0.01" min="0" placeholder="^IRX"></label>
+      <label class="field narrow"><span>div yield %</span><input id="f-carry" type="number" step="0.01" placeholder="parity"></label>
+      <label class="field narrow"><span>entry</span><input id="f-entry" type="number" step="0.01" min="0.01" placeholder="mid"></label>
+      <label class="field narrow"><span>spot</span><input id="f-spot" type="number" step="0.01" min="0.01" placeholder="chain close"></label>
+      <label class="field">
+        <span>model</span>
+        <select id="f-model">
+          <option value="">auto — tree for stocks, closed form for indices</option>
+          <option value="binomial">American · CRR tree</option>
+          <option value="bs">European · Black-Scholes</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>vol across the grid</span>
+        <select id="f-volmode">
+          <option value="sticky_strike">sticky strike — this contract's IV, held</option>
+          <option value="sticky_delta">sticky delta — IV re-read off the smile</option>
+        </select>
+      </label>
+      <div class="field seg">
+        <span>position</span>
+        <div class="seg-inner">
+          <button data-side="long" class="on">LONG</button>
+          <button data-side="short">SHORT</button>
+        </div>
+      </div>
+    </div>
+  </details>
+</section>
+
+<main>
+  <section id="summary" class="stats" aria-live="polite">
+    <div class="stat"><span class="k">entry premium</span><b class="v" id="s-premium">—</b><span class="n" id="s-premium-note"></span></div>
+    <div class="stat"><span class="k">model value now</span><b class="v" id="s-theory">—</b><span class="n" id="s-theory-note"></span></div>
+    <div class="stat"><span class="k">vol</span><b class="v" id="s-iv">—</b><span class="n" id="s-iv-note"></span></div>
+    <div class="stat"><span class="k">breakeven</span><b class="v" id="s-be">—</b><span class="n" id="s-be-note"></span></div>
+    <div class="stat"><span class="k">delta</span><b class="v" id="s-delta">—</b><span class="n" id="s-delta-note"></span></div>
+    <div class="stat wide"><span class="k">greeks</span><b class="v mono small" id="s-greeks">—</b><span class="n" id="s-greeks-note"></span></div>
+  </section>
+
+  <section class="panel chart-panel">
+    <div class="panel-head">
+      <h2>what the contract pays</h2>
+      <div class="legend" id="legend">
+        <span class="lg expiry">P&amp;L at expiry</span>
+        <span class="lg now">if the stock trades there today</span>
+      </div>
+      <div class="panel-tools">
+        <button id="btn-link" class="btn ghost" title="Copy a link that reproduces this exact ladder">copy link</button>
+        <button id="btn-csv" class="btn ghost" title="Download the ladder as CSV">CSV</button>
+      </div>
+    </div>
+    <div id="chart-wrap" class="chart-wrap">
+      <svg id="chart" viewBox="0 0 980 340" preserveAspectRatio="none" role="img" aria-label="profit and loss by stock price"></svg>
+      <div id="tooltip" class="tooltip" hidden></div>
+    </div>
+    <div id="chart-caption" class="caption"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>the ladder</h2>
+      <div class="hint" id="table-hint">rows are the stock price; everything else follows from it</div>
+    </div>
+    <div class="table-wrap">
+      <table id="ladder">
+        <thead>
+          <tr>
+            <th data-tip="the price the stock is at in that row">stock</th>
+            <th data-tip="how far that is from today's spot">move</th>
+            <th data-tip="the option's delta at that stock price">Δ</th>
+            <th data-tip="what this contract is worth with the stock at that price today, same time to expiry">premium&nbsp;now</th>
+            <th data-tip="selling it at that premium, less the premium you paid — the blue line">P&amp;L&nbsp;today</th>
+            <th data-tip="intrinsic value if it expires there — no model involved">at&nbsp;expiry</th>
+            <th data-tip="settling there, less the premium you paid — the green line">P&amp;L&nbsp;at&nbsp;expiry</th>
+            <th data-tip="expiry P&L as a share of the premium paid">return</th>
+          </tr>
+        </thead>
+        <tbody id="ladder-body">
+          <tr><td colspan="8" class="empty">load a ticker to build the ladder</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="notes" class="notes" hidden>
+    <h2>what this ladder is and is not</h2>
+    <ul id="notes-list"></ul>
+    <p class="foot" id="provenance"></p>
+  </section>
+
+  <div id="error" class="error" hidden></div>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

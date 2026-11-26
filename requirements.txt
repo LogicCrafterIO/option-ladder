@@ -1,0 +1,8 @@
+# The workspace .venv already satisfies all four; these are for a fresh checkout.
+fastapi>=0.115
+uvicorn>=0.30
+numpy>=1.26
+# yfinance is optional: used for the 13-week bill (^IRX), realized vol, and as the
+# chain fallback when CBOE is unreachable. Without it the app still prices — it
+# falls back to a 4% rate and asks for a vol by hand.
+yfinance>=0.2.40
